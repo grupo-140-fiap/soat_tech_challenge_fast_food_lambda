@@ -1,0 +1,50 @@
+name: Projeto Tech Challenge - SOAT - Sistema de controle de pedidos para lanchonete
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::323726447562:role/soat-tech-challenge-fast-food-role
+
+jobs:
+  plan:
+    name: Deploy Lambda
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v4
+
+      - name: Configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        name: Terraform setup
+
+      - id: init
+        name: Terraform init
+        run: terraform init
+
+      - id: validate
+        name: Terraform validate
+        if: github.event_name == 'pull_request'
+        run: terraform validate -no-color
+
+      - id: plan
+        name: Terraform plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color -var 'aws_profile=${{ env.AWS_ROLE_ARN }}'
+
+      - id: push
+        name: Terraform apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -input=false -auto-approve -var 'aws_profile=${{ env.AWS_ROLE_ARN }}'
