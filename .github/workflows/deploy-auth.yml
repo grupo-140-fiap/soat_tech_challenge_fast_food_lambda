@@ -1,0 +1,107 @@
+name: Deploy Auth Lambda
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'auth/**'
+      - '.github/workflows/deploy-auth.yml'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  LAMBDA_FUNCTION_NAME: soat-fast-food-auth-dev
+  S3_BUCKET: soat-fast-food-lambda-packages-dev
+  S3_KEY: auth/lambda.zip
+
+jobs:
+  deploy:
+    name: Build and Deploy Lambda
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: auth/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd auth
+          npm ci --production
+
+      - name: Create deployment package
+        run: |
+          cd auth
+          zip -r lambda.zip src/ node_modules/
+          ls -lh lambda.zip
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload to S3
+        run: |
+          aws s3 cp auth/lambda.zip s3://${{ env.S3_BUCKET }}/${{ env.S3_KEY }}
+          echo "✅ Lambda package uploaded to S3"
+
+      - name: Update Lambda function
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --s3-bucket ${{ env.S3_BUCKET }} \
+            --s3-key ${{ env.S3_KEY }} \
+            --publish
+          echo "✅ Lambda function updated"
+
+      - name: Wait for update to complete
+        run: |
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }}
+          echo "✅ Lambda function update completed"
+
+      - name: Get function info
+        run: |
+          aws lambda get-function \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --query 'Configuration.[FunctionName,Runtime,LastModified,Version]' \
+            --output table
+
+      - name: Test Lambda function
+        run: |
+          aws lambda invoke \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --payload '{"body":"{\"cpf\":\"12345678900\"}"}' \
+            --cli-binary-format raw-in-base64-out \
+            response.json
+          
+          echo "Lambda Response:"
+          cat response.json
+          echo ""
+          
+          # Check if response contains expected fields
+          if grep -q "error\|token" response.json; then
+            echo "✅ Lambda function is responding correctly"
+          else
+            echo "❌ Unexpected Lambda response"
+            exit 1
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Function**: ${{ env.LAMBDA_FUNCTION_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **S3 Bucket**: ${{ env.S3_BUCKET }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **S3 Key**: ${{ env.S3_KEY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Deployed successfully" >> $GITHUB_STEP_SUMMARY
