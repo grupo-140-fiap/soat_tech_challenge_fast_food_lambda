@@ -14,6 +14,7 @@ const client = new CognitoIdentityProviderClient({
 const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
 const CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 
+
 /**
  * Sync customer data to Cognito User Pool
  * Creates or updates user with customer information
