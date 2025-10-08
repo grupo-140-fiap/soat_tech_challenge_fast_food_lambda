@@ -13,6 +13,14 @@ const client = new CognitoIdentityProviderClient({
 
 const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
 const CLIENT_ID = process.env.COGNITO_CLIENT_ID;
+const DEFAULT_PASSWORD_ENV = process.env.COGNITO_DEFAULT_PASSWORD || '';
+
+function buildDefaultPassword(cpf, email) {
+  if (DEFAULT_PASSWORD_ENV) return DEFAULT_PASSWORD_ENV;
+  // Deterministic password meeting Cognito complexity (upper/lower/number/symbol)
+  const last4 = (cpf || '').slice(-4) || '0000';
+  return `Aa#${last4}!${(email || 'user').length}`;
+}
 
 /**
  * Sync customer data to Cognito User Pool
@@ -28,26 +36,47 @@ async function syncUserToCognito(customer) {
       UserPoolId: USER_POOL_ID,
       Username: username
     });
-    
-    await client.send(getUserCommand);
-    
-    // User exists, update attributes
-    const updateCommand = new AdminUpdateUserAttributesCommand({
+    const getResp = await client.send(getUserCommand);
+
+    // Build current attributes map
+    const current = new Map((getResp.UserAttributes || []).map(a => [a.Name, a.Value]));
+
+    // Prepare updates: do NOT update immutable custom:cpf
+    const updates = [];
+    if (current.get('email') !== customer.email) {
+      updates.push({ Name: 'email', Value: customer.email });
+    }
+    if (current.get('custom:customer_id') !== String(customer.id)) {
+      updates.push({ Name: 'custom:customer_id', Value: String(customer.id) });
+    }
+
+    if (updates.length > 0) {
+      const updateCommand = new AdminUpdateUserAttributesCommand({
+        UserPoolId: USER_POOL_ID,
+        Username: username,
+        UserAttributes: updates
+      });
+      await client.send(updateCommand);
+      console.log(`User ${username} updated in Cognito`);
+    } else {
+      console.log(`User ${username} already up to date in Cognito`);
+    }
+
+    // Ensure a known permanent password to allow ADMIN_NO_SRP_AUTH
+    const pwd = buildDefaultPassword(customer.cpf, customer.email);
+    const setPasswordCommand = new AdminSetUserPasswordCommand({
       UserPoolId: USER_POOL_ID,
       Username: username,
-      UserAttributes: [
-        { Name: 'email', Value: customer.email },
-        { Name: 'custom:customer_id', Value: customer.id.toString() },
-        { Name: 'custom:cpf', Value: customer.cpf }
-      ]
+      Password: pwd,
+      Permanent: true
     });
-    
-    await client.send(updateCommand);
-    console.log(`User ${username} updated in Cognito`);
+    await client.send(setPasswordCommand);
+    console.log(`Password ensured for ${username}`);
     
   } catch (error) {
     if (error.name === 'UserNotFoundException') {
       // User doesn't exist, create new
+      const tempPwd = buildDefaultPassword(customer.cpf, customer.email);
       const createCommand = new AdminCreateUserCommand({
         UserPoolId: USER_POOL_ID,
         Username: username,
@@ -58,7 +87,7 @@ async function syncUserToCognito(customer) {
           { Name: 'custom:cpf', Value: customer.cpf }
         ],
         MessageAction: 'SUPPRESS', // Don't send welcome email
-        TemporaryPassword: generateTemporaryPassword()
+        TemporaryPassword: tempPwd
       });
       
       await client.send(createCommand);
@@ -67,7 +96,7 @@ async function syncUserToCognito(customer) {
       const setPasswordCommand = new AdminSetUserPasswordCommand({
         UserPoolId: USER_POOL_ID,
         Username: username,
-        Password: generateTemporaryPassword(),
+        Password: tempPwd,
         Permanent: true
       });
       
@@ -89,13 +118,14 @@ async function syncUserToCognito(customer) {
  */
 async function generateToken(cpf, email) {
   try {
+    const password = buildDefaultPassword(cpf, email);
     const authCommand = new AdminInitiateAuthCommand({
       UserPoolId: USER_POOL_ID,
       ClientId: CLIENT_ID,
       AuthFlow: 'ADMIN_NO_SRP_AUTH',
       AuthParameters: {
         USERNAME: email,
-        PASSWORD: generateTemporaryPassword()
+        PASSWORD: password
       }
     });
     
