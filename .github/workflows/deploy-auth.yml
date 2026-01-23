@@ -12,7 +12,7 @@ on:
 env:
   AWS_REGION: us-east-1
   LAMBDA_FUNCTION_NAME: soat-fast-food-auth-dev
-  S3_BUCKET: soat-fast-food-lambda-packages-dev
+  S3_BUCKET: soat-fast-food-lambda-packages-new-dev
   S3_KEY: auth/lambda.zip
 
 jobs:
